@@ -1,0 +1,16 @@
+[package]
+name = "chksum"
+version = "0.3.0"
+authors = ["jens"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sha2 = "0.10.7"
+clap = "4.4"
+walkdir = "^2.3"
+blake3 = "1.4.1"
+time = { version = "0.3.28", features = ["formatting"] }
+log = "0.4.20"
+rayon = "1.8.0"
