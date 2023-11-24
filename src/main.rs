@@ -1,4 +1,3 @@
-use clap::builder::PossibleValuesParser;
 use clap::{Arg, Command, ArgAction};
 use std::collections::{HashSet, HashMap};
 use std::env::current_dir;
@@ -16,7 +15,7 @@ mod files;
 
 fn main() -> std::io::Result<()> {
     let args = Command::new("chksum")
-        .version("0.3.0")
+        .version("0.4.0")
         .author("Jens Larsson <jenslar@fastmail.com>")
         .term_width(80)
         .about("Calculate SHA256 or BLAKE3 checksum for all files in SOURCE directory recursively,
