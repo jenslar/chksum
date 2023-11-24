@@ -260,13 +260,6 @@ utility if there is a need to verify Blake3 checksums for individual files (http
                 now_to_string()
             ))
         }
-
-        let path = Path::new("checksums_source.csv");
-        match writefile(&log_source.join("\n"), path) {
-            Ok(true) => println!("Wrote {}", path.display()),
-            Ok(false) => println!("Write aborted by user"),
-            Err(err) => eprintln!("(!) Failed to write {}: {err}", path.display()),
-        }
     }
 
     println!("{} ({} files{})\n",
@@ -506,6 +499,20 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             let log_missing_path = log_dir.join(Path::new("missing_in_target.csv"));
             let log_changed_path = log_dir.join(Path::new("changed_in_target.csv"));
             let log_ignored_path = log_dir.join(Path::new("missing_in_source.csv")); // ignored
+            let log_source_path = log_dir.join("checksums_source.csv");
+            let log_target_path = log_dir.join("checksums_target.csv");
+
+            match writefile(&log_source.join("\n"), &log_source_path) {
+                Ok(true) => println!("Wrote {}", log_source_path.display()),
+                Ok(false) => println!("Write aborted by user"),
+                Err(err) => eprintln!("(!) Failed to write {}: {err}", log_source_path.display()),
+            }
+
+            match writefile(&log_target.join("\n"), &log_target_path) {
+                Ok(true) => println!("Wrote {}", log_target_path.display()),
+                Ok(false) => println!("Write aborted by user"),
+                Err(err) => eprintln!("(!) Failed to write {}: {err}", log_target_path.display()),
+            }
 
             if missing.len() > 0 {
                 match writefile(&format!("{}\n", log_missing.join("\n")), &log_missing_path) {
