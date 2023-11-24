@@ -1,10 +1,12 @@
+use clap::builder::PossibleValuesParser;
 use clap::{Arg, Command, ArgAction};
 use std::collections::{HashSet, HashMap};
+use std::env::current_dir;
 use std::io::Write;
 use std::path::{PathBuf, Path};
 
 use crate::datetime::{datetime_modified, now_to_string};
-use crate::files::{paths, file_count, filename_to_string, writefile};
+use crate::files::{paths, file_count, filename_to_string, writefile, LogLevel};
 use crate::hash::{HashType, hash2path, hash_files};
 
 mod hash;
@@ -66,6 +68,22 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             .short('l')
             .long("log")
             .action(ArgAction::SetTrue))
+        .arg(Arg::new("log-dir")
+            .help("Custom log directory.")
+            .long("log-dir")
+            .alias("ld")
+            .value_parser(clap::value_parser!(PathBuf)))
+        // .arg(Arg::new("log-level")
+        //     // .help("Log hashes and paths as tab-separated text files. Can be used as input for 'source-hashes' and 'target-hashes'.")
+        //     .help("Log hashes and paths as tab-separated text files.")
+        //     .alias("ll")
+        //     .long("log-level")
+        //     .requires("log")
+        //     .default_value("normal")
+        //     .value_parser(PossibleValuesParser::new([
+        //         "verbose",
+        //         "normal"
+        //     ])))
         .arg(Arg::new("duplicates")
             .help("Find duplicate files.")
             .long("duplicates")
@@ -114,7 +132,12 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let duplicates = *args.get_one::<bool>("duplicates").unwrap();
     let fileext_count = *args.get_one::<bool>("count").unwrap();
     let verbose = *args.get_one::<bool>("verbose").unwrap();
-    let log = *args.get_one::<bool>("log").unwrap();
+    let log_dir = match args.get_one::<PathBuf>("log-dir") {
+        Some(d) => d.to_owned(),
+        None => current_dir()?.join("chksum_logs")
+    };
+    let mut log_message = format!("Results have been logged to {}", log_dir.display());
+    let log_level = LogLevel::from(*args.get_one::<bool>("log").unwrap());
     let include_hidden = *args.get_one::<bool>("include-hidden").unwrap();
     let follow_symlinks = *args.get_one::<bool>("follow-symlinks").unwrap();
     let partial_hash_size = *args.get_one::<usize>("partial-hash-size").unwrap(); // clap default 1000
@@ -125,6 +148,16 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         false => HashType::Sha256
     };
 
+    // All entries in source dir
+    let mut log_source = vec![format!(
+        "FILENAME\tSOURCEPATH\t{}\tDATETIME",
+        hash_type.to_string()
+    )];
+    // All entries in target dir
+    let mut log_target = vec![format!(
+        "FILENAME\tTARGETPATH\t{}\tDATETIME",
+        hash_type.to_string()
+    )];
     let mut log_matched = vec![format!(
         "FILENAME\tTARGETPATH\t{}\tDATETIME",
         hash_type.to_string()
@@ -158,6 +191,10 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let mut source_count = 0;
     let mut target_count = 0;
 
+    // SOURCE DIR SET (REQUIRED), HASH ALL FILES
+
+    // Compile paths first to enable parallell processing when hashing
+    // Note that makes it impossible to write incremental logs...
     print!("[ {} | {} ] Compiling paths...", if duplicates {"DUPCHK"} else {"SOURCE"}, source_dir.display());
     std::io::stdout().flush()?;
     let source_paths = paths(
@@ -208,11 +245,32 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         Some(source_dir)
     );
 
+    // Write all source hashes as CSV to disk
+    if log_level == LogLevel::Normal {
+        for (path, hash) in source_hashes.values() {
+            log_source.push(format!("{}\t{}\t{}\t{}",
+                filename_to_string(path).unwrap_or("FILENAME ERROR".to_owned()),
+                path.display(),
+                hash,
+                now_to_string()
+            ))
+        }
+
+        let path = Path::new("checksums_source.csv");
+        match writefile(&log_source.join("\n"), path) {
+            Ok(true) => println!("Wrote {}", path.display()),
+            Ok(false) => println!("Write aborted by user"),
+            Err(err) => eprintln!("(!) Failed to write {}: {err}", path.display()),
+        }
+    }
+
     println!("{} ({} files{})\n",
         if duplicates {"Duplicate quick check done"} else {"Done"},
         source_hashes.len(),
         if duplicates {format!(" @ {} bytes each", dupl_quickcheck_size.unwrap())} else {"".to_string()}
     );
+
+    // CHECK IF DUPLICATES SET: PRE-HASH, PRUNE, HASH FILES IN SOURCE DIR
 
     if duplicates {
 
@@ -268,6 +326,8 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             }
         }
 
+    // CHECK IF TARGET DIR SET, HASH FILES FOR COMPARING WITH SOURCE DIR
+
     } else if let Some(tdir) = target_dir {
 
         print!("[ TARGET | {} ] Compiling paths...", tdir.display());
@@ -297,9 +357,21 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         for (source_path, (_full_source_path, source_hash)) in source_hashes.iter() {
             match target_hashes.get(source_path) {
                 Some((full_target_path, target_hash)) => {
+
+                    // log all target files
+                    if log_level == LogLevel::Normal {
+                        log_target.push(format!("{}\t{}\t{}\t{}",
+                            filename_to_string(full_target_path).unwrap_or("FILENAME ERROR".to_owned()),
+                            full_target_path.display(),
+                            target_hash,
+                            now_to_string()
+                        ))
+                    }
+
                     // matching files
                     if source_hash == target_hash {
-                        if log {
+                        // log matching files
+                        if log_level == LogLevel::Normal {
                             // filename, path, hash, datetime
                             log_matched.push(format!("{}\t{}\t{}\t{}",
                                 filename_to_string(full_target_path).unwrap_or("FILENAME ERROR".to_owned()),
@@ -316,7 +388,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
                     }
                 },
                 None => {
-                    if log {
+                    if log_level == LogLevel::Normal {
                         // filename, path, hash, datetime
                         log_missing.push(format!("{}\t{}\t{}\t{}",
                             filename_to_string(source_path).unwrap_or("FILENAME ERROR".to_owned()),
@@ -332,7 +404,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         for (target_path, (_full_target_path, target_hash)) in target_hashes.iter() {
             // file path doesn't exist in source, assume new file
             if source_hashes.get(target_path).is_none() {
-                if log {
+                if log_level == LogLevel::Normal {
                     // filename, path, hash, datetime
                     log_ignored.push(format!("{}\t{}\t{}\t{}",
                         filename_to_string(target_path).unwrap_or("FILENAME ERROR".to_owned()),
@@ -383,7 +455,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
                     .expect("Failed to determine target size")
                     .len();
 
-                if log {
+                if log_level == LogLevel::Normal {
                     log_changed.push(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t",
                         filename_to_string(source_path).unwrap_or("FILENAME ERROR".to_owned()),
                         source_path.display(),
@@ -418,22 +490,22 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         println!("{}/{} files match", matched.len(), source_count);
         println!("{:4} files missing in target", missing.len());
         println!("{:4} files changed in target", changed.len());
-        println!("{:4} files not in source", ignored.len());
+        println!("{:4} files missing in source", ignored.len());
     }
     
-    if log {
+    if log_level == LogLevel::Normal {
         let log_matched_path: PathBuf;
 
-        if let Some(t) = target_dir {
-            log_matched_path = Path::new(t).join(Path::new("checksums_matched.csv"));
-            let log_missing_path = Path::new(t).join(Path::new("checksums_missing.csv"));
-            let log_changed_path = Path::new(t).join(Path::new("checksums_changed.csv"));
-            let log_ignored_path = Path::new(t).join(Path::new("checksums_ignored.csv"));
+        if let Some(_t) = target_dir {
+            log_matched_path = log_dir.join(Path::new("matched.csv"));
+            let log_missing_path = log_dir.join(Path::new("missing_in_target.csv"));
+            let log_changed_path = log_dir.join(Path::new("changed_in_target.csv"));
+            let log_ignored_path = log_dir.join(Path::new("missing_in_source.csv")); // ignored
 
             if missing.len() > 0 {
                 match writefile(&format!("{}\n", log_missing.join("\n")), &log_missing_path) {
                     Ok(true) => println!("Wrote {}", log_missing_path.display()),
-                    Ok(false) => println!("User aborted writing CSV."),
+                    Ok(false) => println!("Aborted writing CSV."),
                     Err(err) => eprintln!("(!) Failed to write {}: {err}", log_missing_path.display())
                 }
             } else {
@@ -443,7 +515,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             if changed.len() > 0 {
                 match writefile(&format!("{}\n", log_changed.join("\n")), &log_changed_path) {
                     Ok(true) => println!("Wrote {}", log_changed_path.display()),
-                    Ok(false) => println!("User aborted writing CSV."),
+                    Ok(false) => println!("Aborted writing CSV."),
                     Err(err) => eprintln!("(!) Failed to write {}: {err}", log_changed_path.display())
                 }
             } else {
@@ -453,7 +525,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             if ignored.len() > 0 {
                 match writefile(&format!("{}\n", log_ignored.join("\n")), &log_ignored_path) {
                     Ok(true) => println!("Wrote {}", log_ignored_path.display()),
-                    Ok(false) => println!("User aborted writing CSV."),
+                    Ok(false) => println!("Aborted writing CSV."),
                     Err(err) => eprintln!("(!) Failed to write {}: {err}", log_ignored_path.display())
                 }
             } else {
@@ -461,9 +533,9 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             }
 
         } else if duplicates {
-            log_matched_path = Path::new(source_dir).join(Path::new("duplicates.csv"));
+            log_matched_path = log_dir.join(Path::new("duplicates.csv"));
         } else {
-            log_matched_path = Path::new(source_dir).join(Path::new("checksums.csv"));
+            log_matched_path = log_dir.join(Path::new("checksums.csv"));
         }
 
         if log_duplicates_max > 0 { // will only be > 0 if duplicates is set AND duplicate files have been found
@@ -475,13 +547,13 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             );
             match writefile(&format!("{}\n", vec![headers, log_duplicates.join("\n")].join("\n")), &log_matched_path) {
                 Ok(true) => println!("Wrote {}", log_matched_path.display()),
-                Ok(false) => println!("User aborted writing CSV."),
+                Ok(false) => println!("Aborted writing CSV."),
                 Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
             }
         } else {
             match writefile(&format!("{}\n", log_matched.join("\n")), &log_matched_path) {
                 Ok(true) => println!("Wrote {}", log_matched_path.display()),
-                Ok(false) => println!("User aborted writing CSV."),
+                Ok(false) => println!("Aborted writing CSV."),
                 Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
             }
         }

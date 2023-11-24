@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, ffi::{OsStr, OsString}, collections::HashMap, fs::File, io::Write};
+use std::{path::{Path, PathBuf}, ffi::{OsStr, OsString}, collections::HashMap, fs::File, io::Write, str::FromStr};
 
 use walkdir::{WalkDir, DirEntry};
 
@@ -84,7 +84,7 @@ pub fn has_extension(path: &Path, ext: &str) -> bool {
 }
 
 /// Write file to disk, prompt user if target file exists
-pub fn writefile(content: &String, outpath: &PathBuf) -> std::io::Result<bool> {
+pub fn writefile(content: &String, outpath: &Path) -> std::io::Result<bool> {
     if Path::new(&outpath).exists() {
         loop {
             print!("(!) '{}' already exists. Overwrite? (y/n): ", outpath.display());
@@ -141,5 +141,31 @@ pub fn filename_to_string(path: &Path) -> Option<String> {
         Some(filename.to_string_lossy().to_string())
     } else {
         None
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LogLevel {
+    Normal,
+    // Verbose,
+    None
+}
+
+impl From<&str> for LogLevel {
+    fn from(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "normal" => Self::Normal,
+            // "verbose" => Self::Verbose,
+            _ => Self::None
+        }
+    }
+}
+
+impl From<bool> for LogLevel {
+    fn from(value: bool) -> Self {
+        match value {
+            true => LogLevel::Normal,
+            false => LogLevel::None,
+        }
     }
 }

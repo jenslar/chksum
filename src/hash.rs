@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use crate::datetime::datetime_to_string;
 
 /// Hash files. Optionally, limit how many bytes to hash via `len`.
+/// Returns hashmap with key: `<RELATIVE_PATH>`, value: `(<FULL_PATH, HASH>)`.
 pub fn hash_files(
     paths: &[PathBuf],
     dirtype: &str,
