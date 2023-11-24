@@ -2,6 +2,7 @@ use clap::builder::PossibleValuesParser;
 use clap::{Arg, Command, ArgAction};
 use std::collections::{HashSet, HashMap};
 use std::env::current_dir;
+use std::fs::create_dir_all;
 use std::io::Write;
 use std::path::{PathBuf, Path};
 
@@ -133,8 +134,12 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let fileext_count = *args.get_one::<bool>("count").unwrap();
     let verbose = *args.get_one::<bool>("verbose").unwrap();
     let log_dir = match args.get_one::<PathBuf>("log-dir") {
-        Some(d) => d.to_owned(),
-        None => current_dir()?.join("chksum_logs")
+        Some(d) => d.to_owned(), // must exist
+        None => {
+            let dir = current_dir()?.join("chksum_logs");
+            create_dir_all(&dir)?;
+            dir
+        }
     };
     let mut log_message = format!("Results have been logged to {}", log_dir.display());
     let log_level = LogLevel::from(*args.get_one::<bool>("log").unwrap());
