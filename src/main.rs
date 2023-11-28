@@ -93,6 +93,11 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             .help("Print count for each file extension.")
             .long("count")
             .action(ArgAction::SetTrue))
+        .arg(Arg::new("case-sensitive")
+            .help("Case sensitive file extensions. Count e.g. 'mp4' and 'MP4' separately. Only valid if 'count' is passed.")
+            .long("case")
+            .requires("count")
+            .action(ArgAction::SetTrue))
         .arg(Arg::new("verbose")
             .help("Print each encountered file.")
             .short('v')
@@ -131,6 +136,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let exclude_ext: Vec<String> = args.get_many("exclude-ext").unwrap_or_default().cloned().collect();
     let duplicates = *args.get_one::<bool>("duplicates").unwrap();
     let fileext_count = *args.get_one::<bool>("count").unwrap();
+    let fileext_case_sensitive = *args.get_one::<bool>("case-sensitive").unwrap();
     let verbose = *args.get_one::<bool>("verbose").unwrap();
     let log_dir = match args.get_one::<PathBuf>("log-dir") {
         Some(d) => d.to_owned(), // must exist
@@ -140,7 +146,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             dir
         }
     };
-    let mut log_message = format!("Results have been logged to {}", log_dir.display());
+
     let log_level = LogLevel::from(*args.get_one::<bool>("log").unwrap());
     let include_hidden = *args.get_one::<bool>("include-hidden").unwrap();
     let follow_symlinks = *args.get_one::<bool>("follow-symlinks").unwrap();
@@ -213,7 +219,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     println!(" Done ({} files)", source_count);
 
     if fileext_count && !duplicates {
-        let extsorted = file_count(&source_paths, None);
+        let extsorted = file_count(&source_paths, None, fileext_case_sensitive);
 
         for (ext, count) in extsorted.iter() {
             println!("{ext:>22} {count:<}")
@@ -317,7 +323,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         println!("  Duplicate hashes:       {}", dupe_hash_count);
         if fileext_count {
             println!("  Distribution:");
-            let ext_unique = file_count(&duplicate_paths.values().cloned().flatten().collect::<Vec<_>>(), Some(2));
+            let ext_unique = file_count(&duplicate_paths.values().cloned().flatten().collect::<Vec<_>>(), Some(2), fileext_case_sensitive);
             for (ext, count) in ext_unique.iter() {
                 println!("{ext:>22} {count:<}")
             }

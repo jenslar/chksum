@@ -109,13 +109,18 @@ pub fn writefile(content: &String, outpath: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-pub fn file_count(paths: &[PathBuf], min_count: Option<usize>) -> Vec<(std::string::String, usize)> {
+pub fn file_count(paths: &[PathBuf], min_count: Option<usize>, case_sensitive: bool) -> Vec<(std::string::String, usize)> {
     let mut extcount: HashMap<String, usize> = HashMap::new();
 
     for path in paths.iter() {
         if path.is_file() {
             match path.extension() {
-                Some(ext) => *extcount.entry(ext.to_string_lossy().to_string()).or_default() += 1,
+                Some(ext) => {
+                    match case_sensitive {
+                        true => *extcount.entry(ext.to_string_lossy().to_string()).or_default() += 1,
+                        false => *extcount.entry(ext.to_ascii_lowercase().to_string_lossy().to_string()).or_default() += 1
+                    }
+                },
                 None => *extcount.entry(String::from("<NO FILE EXT>")).or_default() += 1,
             }
         }
