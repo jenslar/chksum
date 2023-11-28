@@ -13,9 +13,11 @@ mod hash;
 mod datetime;
 mod files;
 
+const VERSION: &'static str = "0.4.1";
+
 fn main() -> std::io::Result<()> {
     let args = Command::new("chksum")
-        .version("0.4.0")
+        .version(VERSION)
         .author("Jens Larsson <jenslar@fastmail.com>")
         .term_width(80)
         .about("Calculate SHA256 or BLAKE3 checksum for all files in SOURCE directory recursively,
