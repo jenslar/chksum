@@ -1,5 +1,5 @@
 # chksum
-Compare file hierarchies, find duplicate files. Developed for personal use so there may be issues...
+Compare file hierarchies, find duplicate files.
 
 Compare folders `DIR1` and `DIR2`. Hash using Blake3, log results to file/s.
 ```
