@@ -1,0 +1,11 @@
+{
+  "binaries": [
+    {
+      "name": "chksum",
+      "src_path": "/Users/jens/dev/rust/chksum/src/main.rs"
+    }
+  ],
+  "examples": [],
+  "integration_tests": [],
+  "unit_tests": []
+}

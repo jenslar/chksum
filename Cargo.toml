@@ -14,3 +14,4 @@ blake3 = "1.4.1"
 time = { version = "0.3.28", features = ["formatting"] }
 log = "0.4.20"
 rayon = "1.8.0"
+filetime = "0.2.23"

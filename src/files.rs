@@ -1,5 +1,7 @@
-use std::{path::{Path, PathBuf}, ffi::{OsStr, OsString}, collections::HashMap, fs::File, io::Write, str::FromStr};
+use std::{path::{Path, PathBuf}, ffi::{OsStr, OsString}, collections::HashMap, fs::File, io::Write};
 
+use filetime::FileTime;
+use time::{OffsetDateTime, ext::NumericalDuration};
 use walkdir::{WalkDir, DirEntry};
 
 /// Returns `true` if `DirEntry`:
@@ -109,6 +111,9 @@ pub fn writefile(content: &String, outpath: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// Returns file count per extension as a hashmap: key: file extension, value: count.
+/// `min_count` is the minimum file count that should be represented in the output,
+///  e.g. if set to 3, any occurrence below 3 will be filtered out.
 pub fn file_count(paths: &[PathBuf], min_count: Option<usize>, case_sensitive: bool) -> Vec<(std::string::String, usize)> {
     let mut extcount: HashMap<String, usize> = HashMap::new();
 
@@ -149,6 +154,14 @@ pub fn filename_to_string(path: &Path) -> Option<String> {
     }
 }
 
+pub fn fileext_to_string(path: &Path) -> Option<String> {
+    if let Some(fileext) = path.extension() {
+        Some(fileext.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LogLevel {
     Normal,
@@ -173,4 +186,26 @@ impl From<bool> for LogLevel {
             false => LogLevel::None,
         }
     }
+}
+
+/// Returns `(FILE_EXTENSION, SIZE_IN_BYTES, CREATED, MODIFIED)`.
+/// 
+/// Creation teim is not available on all systems and is optional.
+pub fn file_stats(path: &Path) -> std::io::Result<(Option<String>, u64, Option<OffsetDateTime>, OffsetDateTime)> {
+    let metadata = path.metadata()?;
+
+    // let ctime = systime2datetime(metadata.created()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    // let mtime = systime2datetime(metadata.modified()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let ctime = FileTime::from_creation_time(&metadata).map(|ft| OffsetDateTime::UNIX_EPOCH + ft.unix_seconds().seconds());
+        // .ok_or(std::io::Error::new(std::io::ErrorKind::Other, "Failed to derive creation time"))?;
+    let mtime = OffsetDateTime::UNIX_EPOCH + FileTime::from_last_modification_time(&metadata).unix_seconds().seconds();
+
+    Ok((
+        fileext_to_string(path),
+        metadata.len(),
+        ctime,
+        mtime
+        // systime2datetime(metadata.created()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+        // systime2datetime(metadata.modified()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+    ))
 }

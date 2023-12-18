@@ -1,4 +1,5 @@
 use clap::{Arg, Command, ArgAction};
+use time::OffsetDateTime;
 use std::collections::{HashSet, HashMap};
 use std::env::current_dir;
 use std::fs::create_dir_all;
@@ -6,12 +7,13 @@ use std::io::Write;
 use std::path::{PathBuf, Path};
 
 use crate::datetime::{datetime_modified, now_to_string};
-use crate::files::{paths, file_count, filename_to_string, writefile, LogLevel};
+use crate::files::{paths, file_count, filename_to_string, writefile, LogLevel, file_stats};
 use crate::hash::{HashType, hash2path, hash_files};
 
 mod hash;
 mod datetime;
 mod files;
+mod tasks;
 
 const VERSION: &'static str = "0.4.1";
 
@@ -91,10 +93,6 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             .long("duplicates")
             .conflicts_with("target-dir")
             .action(ArgAction::SetTrue))
-        .arg(Arg::new("count")
-            .help("Print count for each file extension.")
-            .long("count")
-            .action(ArgAction::SetTrue))
         .arg(Arg::new("case-sensitive")
             .help("Case sensitive file extensions. Count e.g. 'mp4' and 'MP4' separately. Only valid if 'count' is passed.")
             .long("case")
@@ -123,6 +121,24 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             .help("Use the much faster Blake3 hash function instead of the default SHA256.")
             .long("blake3")
             .action(ArgAction::SetTrue))
+        .arg(Arg::new("stats")
+            .help("Returns an overview of source-dir.")
+            .long("stats")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("stats-sort-count")
+            .help("Sort file stats on file extension count.")
+            .long("sort-count")
+            .alias("sc")
+            .requires("stats")
+            .conflicts_with("stats-sort-size")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("stats-sort-size")
+            .help("Sort file stats on total file size.")
+            .long("sort-size")
+            .alias("sz")
+            .requires("stats")
+            .conflicts_with("stats-sort-count")
+            .action(ArgAction::SetTrue))
         // TODO reinstate possibility to check is FileA exists both in <DIRA> and <DIRB> regardless of path, i.e. report match if so
         // .arg(Arg::new("match-filename")
         //     .help("Compare filename instead of full path.")
@@ -137,17 +153,9 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let include_ext: Vec<String> = args.get_many("include-ext").unwrap_or_default().cloned().collect();
     let exclude_ext: Vec<String> = args.get_many("exclude-ext").unwrap_or_default().cloned().collect();
     let duplicates = *args.get_one::<bool>("duplicates").unwrap();
-    let fileext_count = *args.get_one::<bool>("count").unwrap();
     let fileext_case_sensitive = *args.get_one::<bool>("case-sensitive").unwrap();
+    let filestats = *args.get_one::<bool>("stats").unwrap();
     let verbose = *args.get_one::<bool>("verbose").unwrap();
-    let log_dir = match args.get_one::<PathBuf>("log-dir") {
-        Some(d) => d.to_owned(), // must exist
-        None => {
-            let dir = current_dir()?.join("chksum_logs");
-            create_dir_all(&dir)?;
-            dir
-        }
-    };
 
     let log_level = LogLevel::from(*args.get_one::<bool>("log").unwrap());
     let include_hidden = *args.get_one::<bool>("include-hidden").unwrap();
@@ -186,10 +194,6 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         "FILENAME\tSOURCEPATH\tSOURCE{0}\tSOURCEMODIFIED\tTARGETPATH\tTARGET{0}\tTARGETMODIFIED",
         hash_type.to_string()
     )];
-    // Duplicate files, somewhat odd structure: HASH\t\FILE1\tFILE2\t... (columns will vary depending on number of duplicates)
-    let mut log_duplicates: Vec<String> = Vec::new();
-    // For determining number of columns/headers
-    let mut log_duplicates_max = 0_usize;
 
     // only in target, assume new/updated
     let mut ignored: HashSet<PathBuf> = HashSet::new();
@@ -203,10 +207,10 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     let mut source_count = 0;
     let mut target_count = 0;
 
-    // SOURCE DIR SET (REQUIRED), HASH ALL FILES
+    // ALL TASKS
 
-    // Compile paths first to enable parallell processing when hashing
-    // Note that makes it impossible to write incremental logs...
+    // Compile paths first to enable parallel processing when hashing
+    // Note that this makes it impossible to write incremental logs or enumerate output in order while hashing...
     print!("[ {} | {} ] Compiling paths...", if duplicates {"DUPCHK"} else {"SOURCE"}, source_dir.display());
     std::io::stdout().flush()?;
     let source_paths = paths(
@@ -220,19 +224,14 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     source_count = source_paths.len();
     println!(" Done ({} files)", source_count);
 
-    if fileext_count && !duplicates {
-        let extsorted = file_count(&source_paths, None, fileext_case_sensitive);
-
-        for (ext, count) in extsorted.iter() {
-            println!("{ext:>22} {count:<}")
-        }
-
-        println!("{}", "-".repeat(30));
-        println!("{:>22} {}", "Files, total", extsorted.iter().map(|(_, n)| n).sum::<usize>());
-        println!("{:>22} {}", "File types", extsorted.len());
-
-        return Ok(())
+    // RUN FILE STATS
+    // No hashes needed, returns early
+    if filestats {
+        return tasks::stats::run(&args, &source_paths);
     }
+
+    // REMAINING TASKS
+    // Require some form of initial hashing of all files
 
     // If duplicates check: read only part of file, then prune unique hashes
     // to lessen the number of file to fully hash. Arbitrary 1000 bytes
@@ -276,64 +275,20 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     );
 
     // CHECK IF DUPLICATES SET: PRE-HASH, PRUNE, HASH FILES IN SOURCE DIR
+    // Duplicate files, somewhat odd structure: HASH\t\FILE1\tFILE2\t... (columns will vary depending on number of duplicates)
+    // let mut log_duplicates: Vec<String> = Vec::new();
+    // // For determining number of columns/headers
+    // let mut log_duplicates_max = 0_usize;
 
     if duplicates {
 
-        print!("Pruning unique hashes...");
-        std::io::stdout().flush()?;
-        let pruned_hashes: HashMap<String, Vec<PathBuf>> = hash2path(&source_hashes).into_iter()
-            .filter(|(_hash, paths)| paths.len() > 1) // remove unique files
-            .collect();
-        let pruned_paths: Vec<_> = pruned_hashes.values()
-            .flatten()
-            .cloned()
-            .collect();
-        println!(" Done (pruned {} unique files)", source_hashes.len() - pruned_paths.len());
-
-        println!("\nHashing remaining files in full...");
-        let duplicate_hashes = hash_files(
-            &pruned_paths,
-            " DUPL ",
-            &hash_type,
-            verbose,
-            None,
-            None,
-        );
-        println!("Done ({} files)\n", duplicate_hashes.len());
-
-        let duplicate_paths = hash2path(&duplicate_hashes);
-        let mut dupe_hash_count = 0;
-        let mut dupe_file_count = 0;
-        for (hash, paths) in duplicate_paths.iter() {
-            log_duplicates.push(format!("{hash}\t{}", paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\t")));
-            if paths.len() > log_duplicates_max {
-                log_duplicates_max = paths.len();
-            }
-            if paths.len() > 1 { // already filtered these above in pruned_hashes?
-                dupe_hash_count += 1;
-                dupe_file_count += paths.len();
-                println!("[{:5} | {} HASH: {}]", dupe_hash_count, hash_type.to_string(), hash);
-                for path in paths.iter() {
-                    println!("    {}", path.display());
-                }
-            }
-        }
-
-        println!("\nSummary:");
-        println!("  Files, total:           {}", source_count);
-        println!("  Duplicate files, total: {}", dupe_file_count);
-        println!("  Duplicate hashes:       {}", dupe_hash_count);
-        if fileext_count {
-            println!("  Distribution:");
-            let ext_unique = file_count(&duplicate_paths.values().cloned().flatten().collect::<Vec<_>>(), Some(2), fileext_case_sensitive);
-            for (ext, count) in ext_unique.iter() {
-                println!("{ext:>22} {count:<}")
-            }
-        }
+        // (log_duplicates, log_duplicates_max) = tasks::duplicates::run(&args, &source_paths, &source_hashes, &hash_type, verbose)?;
+        return tasks::duplicates::run(&args, &source_paths, &source_hashes, &hash_type, verbose);
 
     // CHECK IF TARGET DIR SET, HASH FILES FOR COMPARING WITH SOURCE DIR
-
-    } else if let Some(tdir) = target_dir {
+    }
+    
+    if let Some(tdir) = target_dir {
 
         print!("[ TARGET | {} ] Compiling paths...", tdir.display());
         let target_paths = paths(
@@ -447,7 +402,8 @@ utility if there is a need to verify Blake3 checksums for individual files (http
                 let (source_path, source_hash) = source_hashes.get(path)
                     .expect("Failed to get source path");
                 let source_modified = datetime_modified(&source_path)
-                    .expect("Failed to retrieve modification date");
+                    .unwrap_or("Failed to retrieve modification date".to_owned());
+                    // .expect("Failed to retrieve modification date");
                 let source_size = source_path.metadata()
                     .expect("Failed to determine source size")
                     .len();
@@ -501,6 +457,15 @@ utility if there is a need to verify Blake3 checksums for individual files (http
     if log_level == LogLevel::Normal {
         let log_matched_path: PathBuf;
 
+        let log_dir = match args.get_one::<PathBuf>("log-dir") {
+            Some(d) => d.to_owned(), // must exist
+            None => {
+                let dir = current_dir()?.join("chksum_logs");
+                create_dir_all(&dir)?;
+                dir
+            }
+        };
+
         if let Some(_t) = target_dir {
             log_matched_path = log_dir.join(Path::new("matched.csv"));
             let log_missing_path = log_dir.join(Path::new("missing_in_target.csv"));
@@ -551,31 +516,31 @@ utility if there is a need to verify Blake3 checksums for individual files (http
                 println!("No ignored files. Skipping CSV.")
             }
 
-        } else if duplicates {
-            log_matched_path = log_dir.join(Path::new("duplicates.csv"));
+        // } else if duplicates {
+        //     log_matched_path = log_dir.join(Path::new("duplicates.csv"));
         } else {
             log_matched_path = log_dir.join(Path::new("checksums.csv"));
         }
 
-        if log_duplicates_max > 0 { // will only be > 0 if duplicates is set AND duplicate files have been found
-            let headers = format!("{}HASH\t{}",
-                hash_type.to_string(),
-                (0..log_duplicates_max).into_iter()
-                    .map(|i| format!("FILE{}\t", i+1))
-                    .collect::<String>()
-            );
-            match writefile(&format!("{}\n", vec![headers, log_duplicates.join("\n")].join("\n")), &log_matched_path) {
-                Ok(true) => println!("Wrote {}", log_matched_path.display()),
-                Ok(false) => println!("Aborted writing CSV."),
-                Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
-            }
-        } else {
-            match writefile(&format!("{}\n", log_matched.join("\n")), &log_matched_path) {
-                Ok(true) => println!("Wrote {}", log_matched_path.display()),
-                Ok(false) => println!("Aborted writing CSV."),
-                Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
-            }
+        // if log_duplicates_max > 0 { // will only be > 0 if duplicates is set AND duplicate files have been found
+        //     let headers = format!("{}HASH\t{}",
+        //         hash_type.to_string(),
+        //         (0..log_duplicates_max).into_iter()
+        //             .map(|i| format!("FILE{}\t", i+1))
+        //             .collect::<String>()
+        //     );
+        //     match writefile(&format!("{}\n", vec![headers, log_duplicates.join("\n")].join("\n")), &log_matched_path) {
+        //         Ok(true) => println!("Wrote {}", log_matched_path.display()),
+        //         Ok(false) => println!("Aborted writing CSV."),
+        //         Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
+        //     }
+        // } else {
+        match writefile(&format!("{}\n", log_matched.join("\n")), &log_matched_path) {
+            Ok(true) => println!("Wrote {}", log_matched_path.display()),
+            Ok(false) => println!("Aborted writing CSV."),
+            Err(err) => println!("(!) Failed to write {}: {err}", log_matched_path.display()),
         }
+        // }
     }
 
     Ok(())
