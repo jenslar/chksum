@@ -12,18 +12,11 @@ use walkdir::{WalkDir, DirEntry};
 pub fn include(
     direntry: &DirEntry,
     include_hidden: bool,
-    ignore_dir: Option<&str>,
     include_ext: &[String],
     exclude_ext: &[String]
 ) -> bool {
     if direntry.path().is_dir() {
         return false
-    }
-
-    if let Some(dir) = ignore_dir {
-        if direntry.path().components().any(|c| c == std::path::Component::Normal(OsStr::new(dir))) {
-            return false
-        }
     }
 
     let is_hidden = direntry.file_name()
@@ -54,24 +47,34 @@ pub fn include(
     true
 }
 
+fn contains_dir(direntry: &DirEntry, dirs: &[String]) -> bool {
+    for dir in dirs.iter() {
+        if direntry.path().components().any(|c| c == std::path::Component::Normal(OsStr::new(dir))) {
+            return true
+        }
+    }
+    false
+}
+
 pub fn paths(
     dir: &Path,
     include_hidden: bool,
     follow_links: bool,
-    ignore_dir: Option<&str>,
+    exclude_dir: &[String],
     include_ext: &[String],
     exclude_ext: &[String]
 ) -> Vec<PathBuf> {
     WalkDir::new(&dir).follow_links(follow_links).into_iter()
+        .filter_entry(|d| !contains_dir(d, exclude_dir)) // ignore dirs (dir names) early if specified
         .filter_map(|result| if let Ok(entry) = result {
-                match include(&entry, include_hidden, ignore_dir, include_ext, exclude_ext) {
-                    true => {
-                        if entry.path_is_symlink() && !follow_links {
-                            None
-                        } else {
-                            Some(entry.path().to_owned())
-                        }
-                    },
+            match include(&entry, include_hidden, include_ext, exclude_ext) {
+                true => {
+                    if entry.path_is_symlink() && !follow_links {
+                        None
+                    } else {
+                        Some(entry.path().to_owned())
+                    }
+                },
                     false => None,
                 }
             } else {
@@ -85,24 +88,45 @@ pub fn has_extension(path: &Path, ext: &str) -> bool {
     path.extension().map(|s| s.to_ascii_lowercase()) == Some(OsString::from(&ext.to_lowercase()))
 }
 
+pub fn acknowledge(msg: &str) -> std::io::Result<bool>{
+    print!("{msg} (y/n): ");
+    std::io::stdout().flush()?;
+    let mut overwrite = String::new();
+    std::io::stdin().read_line(&mut overwrite)?;
+
+    loop {
+        match overwrite.to_lowercase().trim_matches('\n') {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => {
+                println!("(!) Enter y/yes or n/no")
+            }
+        }
+    }
+}
+
 /// Write file to disk, prompt user if target file exists
 pub fn writefile(content: &String, outpath: &Path) -> std::io::Result<bool> {
     if Path::new(&outpath).exists() {
-        loop {
-            print!("(!) '{}' already exists. Overwrite? (y/n): ", outpath.display());
-            std::io::stdout().flush()?;
-            let mut overwrite = String::new();
-            std::io::stdin().read_line(&mut overwrite)?;
-
-            match overwrite.to_lowercase().trim_matches('\n') {
-                "y" | "yes" => break,
-                "n" | "no" => return Ok(false),
-                _ => {
-                    println!("(!) Enter y/yes or n/no");
-                    continue;
-                }
-            }
+        let msg = format!("(!) '{}' already exists. Overwrite?", outpath.display());
+        if acknowledge(&msg)? == false {
+            return Ok(false)
         }
+        // loop {
+        //     print!("(!) '{}' already exists. Overwrite? (y/n): ", outpath.display());
+        //     std::io::stdout().flush()?;
+        //     let mut overwrite = String::new();
+        //     std::io::stdin().read_line(&mut overwrite)?;
+
+        //     match overwrite.to_lowercase().trim_matches('\n') {
+        //         "y" | "yes" => break,
+        //         "n" | "no" => return Ok(false),
+        //         _ => {
+        //             println!("(!) Enter y/yes or n/no");
+        //             continue;
+        //         }
+        //     }
+        // }
     }
 
     let mut outfile = File::create(&outpath)?;
@@ -190,14 +214,13 @@ impl From<bool> for LogLevel {
 
 /// Returns `(FILE_EXTENSION, SIZE_IN_BYTES, CREATED, MODIFIED)`.
 /// 
-/// Creation teim is not available on all systems and is optional.
+/// Creation time is not available on all systems and is optional.
 pub fn file_stats(path: &Path) -> std::io::Result<(Option<String>, u64, Option<OffsetDateTime>, OffsetDateTime)> {
     let metadata = path.metadata()?;
 
     // let ctime = systime2datetime(metadata.created()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     // let mtime = systime2datetime(metadata.modified()?).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let ctime = FileTime::from_creation_time(&metadata).map(|ft| OffsetDateTime::UNIX_EPOCH + ft.unix_seconds().seconds());
-        // .ok_or(std::io::Error::new(std::io::ErrorKind::Other, "Failed to derive creation time"))?;
     let mtime = OffsetDateTime::UNIX_EPOCH + FileTime::from_last_modification_time(&metadata).unix_seconds().seconds();
 
     Ok((

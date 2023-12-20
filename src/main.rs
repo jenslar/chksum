@@ -14,17 +14,18 @@ mod hash;
 mod datetime;
 mod files;
 mod tasks;
+mod errors;
 
-const VERSION: &'static str = "0.4.1";
+const VERSION: &'static str = "0.4.7";
 
 fn main() -> std::io::Result<()> {
     let args = Command::new("chksum")
         .version(VERSION)
         .author("Jens Larsson <jenslar@fastmail.com>")
         .term_width(80)
-        .about("Calculate SHA256 or BLAKE3 checksum for all files in SOURCE directory recursively,
-and optionally compare and match with all files in TARGET directory recursively. Matches checksum and relative path in SOURCE and TARGET
-by default.
+        .about("Calculate SHA256 or BLAKE3 checksum for all files in source directory recursively.
+Optionally compare and match with all files in target directory recursively. Other uses are finding duplicate files,
+or list an overview of total size of file types (file extension) in source directory.
 
 NOTE: Sha256 checksums do not match Blake3 checksums. Blake3 is the faster of the two. Install the 'b3sum'
 utility if there is a need to verify Blake3 checksums for individual files (https://github.com/BLAKE3-team/BLAKE3).")
@@ -49,21 +50,22 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         //     .alias("th")
         //     .long("target-hashes")
         //     .value_parser(clap::value_parser!(PathBuf)))
-        .arg(Arg::new("ignore-dir")
-            .help("Ignore any sub-directory with this name.")
-            .short('i')
-            .long("ignore-dir")
-            // TODO should allow multiple ignore dirs
-            // .num_args(1..)
+        .arg(Arg::new("exclude-dir")
+            .help("Exclude any sub-directory with this name.")
+            .long("exclude-dir")
+            .alias("ed")
+            .num_args(1..)
             .value_parser(clap::value_parser!(String)))
         .arg(Arg::new("include-ext")
             .help("File extensions to consider. Ignores all other files.")
-            .long("include")
+            .long("include-ext")
+            .alias("ie")
             .num_args(1..)
             .value_parser(clap::value_parser!(String)))
         .arg(Arg::new("exclude-ext")
             .help("File extensions to exclude.")
-            .long("exclude")
+            .long("exclude-ext")
+            .alias("ee")
             .num_args(1..)
             .value_parser(clap::value_parser!(String)))
         .arg(Arg::new("log")
@@ -118,26 +120,38 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             .requires("duplicates")
             .value_parser(clap::value_parser!(usize)))
         .arg(Arg::new("blake3")
-            .help("Use the much faster Blake3 hash function instead of the default SHA256.")
+            .help("Use the faster Blake3 hashing algorithm instead of the default SHA256.")
             .long("blake3")
             .action(ArgAction::SetTrue))
         .arg(Arg::new("stats")
             .help("Returns an overview of source-dir.")
             .long("stats")
             .action(ArgAction::SetTrue))
+        .arg(Arg::new("threshold")
+            .help("Threshold in percent. Filetypes below threshold volume will not be shown for 'stats'.")
+            .long("threshold")
+            .default_value("1.0")
+            .value_parser(clap::value_parser!(f64)))
         .arg(Arg::new("stats-sort-count")
             .help("Sort file stats on file extension count.")
             .long("sort-count")
             .alias("sc")
             .requires("stats")
-            .conflicts_with("stats-sort-size")
+            .conflicts_with_all(["stats-sort-size", "stats-sort-alpha"])
             .action(ArgAction::SetTrue))
         .arg(Arg::new("stats-sort-size")
             .help("Sort file stats on total file size.")
             .long("sort-size")
             .alias("sz")
             .requires("stats")
-            .conflicts_with("stats-sort-count")
+            .conflicts_with_all(["stats-sort-count", "stats-sort-alpha"])
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("stats-sort-alpha")
+            .help("Sort file stats on file extension alphabetically.")
+            .long("sort-alpha")
+            .alias("sa")
+            .requires("stats")
+            .conflicts_with_all(["stats-sort-count", "stats-sort-size"])
             .action(ArgAction::SetTrue))
         // TODO reinstate possibility to check is FileA exists both in <DIRA> and <DIRB> regardless of path, i.e. report match if so
         // .arg(Arg::new("match-filename")
@@ -149,7 +163,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
 
     let source_dir = args.get_one::<PathBuf>("source-dir").unwrap(); // required arg
     let target_dir = args.get_one::<PathBuf>("target-dir");
-    let ignore_dir = args.get_one::<String>("ignore-dir").map(|s| s.as_str());
+    let exclude_dir: Vec<String> = args.get_many("exclude-dir").unwrap_or_default().cloned().collect();
     let include_ext: Vec<String> = args.get_many("include-ext").unwrap_or_default().cloned().collect();
     let exclude_ext: Vec<String> = args.get_many("exclude-ext").unwrap_or_default().cloned().collect();
     let duplicates = *args.get_one::<bool>("duplicates").unwrap();
@@ -217,7 +231,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         &source_dir,
         include_hidden,
         follow_symlinks,
-        ignore_dir.as_deref(),
+        &exclude_dir,
         &include_ext,
         &exclude_ext,
     );
@@ -254,7 +268,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
         verbose,
         dupl_quickcheck_size,
         Some(source_dir)
-    );
+    )?;
 
     // Write all source hashes as CSV to disk
     if log_level == LogLevel::Normal {
@@ -295,7 +309,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             tdir,
             include_hidden,
             follow_symlinks,
-            ignore_dir.as_deref(),
+            &exclude_dir,
             &include_ext,
             &exclude_ext
         );
@@ -310,7 +324,7 @@ utility if there is a need to verify Blake3 checksums for individual files (http
             verbose,
             None,
             Some(tdir)
-        );
+        )?;
         println!("Done ({} files)\n", target_hashes.len());
 
         // find files not in target dir
