@@ -59,14 +59,14 @@ pub fn run(
                 .to_string_lossy()
                 .to_string();
         }
-        // if paths.len() > 1 { // already filtered these above in pruned_hashes?
-        dupe_hash_count += 1;
-        dupe_paths.extend(paths.to_owned());
-        println!("[{:5} | {} HASH: {}]", dupe_hash_count, hash_type.to_string(), hash);
-        for path in paths.iter() {
-            println!("    {}", path.display());
+        if paths.len() > 1 { // required, but already filtered these above in pruned_hashes?
+            dupe_hash_count += 1;
+            dupe_paths.extend(paths.to_owned());
+            println!("[{:5} | {} HASH: {}]", dupe_hash_count, hash_type.to_string(), hash);
+            for path in paths.iter() {
+                println!("    {}", path.display());
+            }
         }
-        // }
     }
 
     println!("\nSummary:");

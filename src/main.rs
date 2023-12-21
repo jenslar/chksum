@@ -16,7 +16,7 @@ mod files;
 mod tasks;
 mod errors;
 
-const VERSION: &'static str = "0.4.7";
+const VERSION: &'static str = "0.4.8";
 
 fn main() -> std::io::Result<()> {
     let args = Command::new("chksum")
