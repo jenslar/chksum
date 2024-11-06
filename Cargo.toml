@@ -1,15 +1,18 @@
 [package]
 name = "chksum"
-version = "0.4.8"
-authors = ["jens"]
+version = "0.5.0"
+authors = ["Jens Larsson <jens.dev@fastmail.com>"]
 edition = "2021"
 
 [dependencies]
 sha2 = "0.10.8"
-clap = "4.4"
-walkdir = "^2.4"
+clap = "4.5"
+walkdir = "2.5"
 blake3 = "1.5"
-time = { version = "0.3.31", features = ["formatting"] }
+time = { version = "0.3.34", features = ["formatting"] }
 # log = "0.4.20"
-rayon = "1.8.0"
+rayon = "1.10"
 filetime = "0.2.23"
+md-5 = "0.10.6"
+# rust_search = "2.1.0"
+num_cpus = "1.16.0"

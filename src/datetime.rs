@@ -15,11 +15,10 @@ pub fn now_to_string() -> std::string::String {
 }
 
 /// Returns modified datetime for path.
-pub fn datetime_modified(path: &Path) -> Option<String> {
+pub fn datetime_modified(path: &Path) -> Option<OffsetDateTime> {
     match path.metadata() {
         Ok(m) => {
-            let dt: OffsetDateTime = m.modified().ok()?.into();
-            Some(datetime_to_string(&dt))
+            Some(m.modified().ok()?.into())
         },
         Err(_) => None
     }
