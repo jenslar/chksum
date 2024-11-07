@@ -157,6 +157,8 @@ utility if there is a need to verify BLAKE3 checksums for individual files (http
         //     .action(ArgAction::SetTrue))
         .get_matches();
 
+    // !!! input paths result in error on Windows 10 if they end in '/' AND contains space,
+    // !!! however using '\' (powershell) works...??? Clap bug? Powershell bug?
     let source_dir = args.get_one::<PathBuf>("source-dir").unwrap(); // required arg
     let target_dir = args.get_one::<PathBuf>("target-dir");
     let exclude_dir: Vec<String> = args
